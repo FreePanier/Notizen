@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notizbuch</title>
+    <meta name="theme-color" content="#007bff">
+    <link rel="apple-touch-icon" href="icons/icon-192x192.png">
+    <link rel="manifest" href="manifest.json?v=2">
+    
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f8ff;
+            color: #333;
+            text-align: center;
+            padding-top: 10px;
+        }
+        .header {
+            width: 90%;
+            max-width: 400px;
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 10px;
+        }
+        .login-link {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 400px;
+        }
+        h1 { color: #007bff; font-size: 1.5rem; margin-top: 0; }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin: 15px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 1rem;
+            resize: none;
+        }
+        .button-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.1em;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: opacity 0.3s;
+            color: white;
+        }
+        .btn-save { background-color: #28a745; }
+        .btn-view { background-color: #007bff; }
+        button:hover { opacity: 0.9; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        
+        #status { margin-top: 15px; font-size: 0.9rem; font-weight: bold; }
+        .online { color: green; }
+        .offline { color: orange; }
+
+        /* Login Dialog Styles */
+        dialog {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            padding: 20px;
+            width: 80%;
+            max-width: 300px;
+        }
+        dialog::backdrop {
+            background: rgba(0,0,0,0.5);
+        }
+        .dialog-content {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .dialog-content input {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .dialog-content button {
+            padding: 10px;
+            background-color: #007bff;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <a class="login-link" onclick="document.getElementById('login-dialog').showModal()">Login</a>
+</div>
+
+<div class="container">
+    <h1>Mein Notizbuch</h1>
+    <textarea id="entry" placeholder="Was willst Du heute notieren?"></textarea>
+    
+    <div class="button-group">
+        <button class="btn-save" id="save-btn" onclick="handleSave()">Speichern</button>
+        <button class="btn-view" onclick="location.href='tagebuch.html'">Anzeigen</button>
+    </div>
+
+    <div id="status"></div>
+</div>
+
+<dialog id="login-dialog">
+    <div class="dialog-content">
+        <h3>Login / Speicherwahl</h3>
+        <p style="font-size: 0.85rem; color: #666; margin-bottom: 10px;">
+            Sie können die Notizen an Ihre Emailadresse senden.
+        </p>
+        
+        <label style="display: flex; align-items: center; gap: 10px; font-size: 0.9rem; margin-bottom: 15px; cursor: pointer;">
+            <input type="checkbox" id="storage-local" checked> Nur lokalen Speicher verwenden
+        </label>
+
+        <input type="email" id="login-email" placeholder="E-Mail">
+        <input type="password" id="login-password" placeholder="Passwort (nur für Server-Speicher)">
+        
+        <div style="display: flex; gap: 10px;">
+            <button onclick="doLogin()" style="flex: 2;">OK</button>
+            <button style="background-color: #ccc; flex: 1;" onclick="document.getElementById('login-dialog').close()">X</button>
+        </div>
+    </div>
+</dialog>
+
+<script>
+    const statusDiv = document.getElementById('status');
+    const entryField = document.getElementById('entry');
+    const saveBtn = document.getElementById('save-btn');
+    const STORAGE_KEY = 'offline_training_entries';
+
+    // Automatischer Login-Dialog bei erstem Aufruf
+    window.addEventListener('DOMContentLoaded', () => {
+        const settings = getNotizCookie();
+        const cookies = document.cookie.split('; ');
+        const hasNotiz = cookies.some(row => row.startsWith('Notiz='));
+        
+        // E-Mail vorausfüllen, falls im Cookie vorhanden
+        if (settings.mail) {
+            document.getElementById('login-email').value = settings.mail;
+        }
+
+        if (!hasNotiz) {
+            document.getElementById('login-dialog').showModal();
+        }
+        
+        // Berechtigungen anfragen (z.B. Notifications für PWA)
+        requestPermissions();
+    });
+
+    async function requestPermissions() {
+        if ('Notification' in window && Notification.permission === 'default') {
+            try {
+                await Notification.requestPermission();
+            } catch (e) { console.log("Permission request failed", e); }
+        }
+    }
+
+    // Cookie Helper
+    function setNotizCookie(mail, storage) {
+        const data = JSON.stringify({ mail, storage });
+        document.cookie = `Notiz=${encodeURIComponent(data)}; path=/; max-age=${60*60*24*30}`;
+    }
+
+    function getNotizCookie() {
+        const cookies = document.cookie.split('; ');
+        const notizCookie = cookies.find(row => row.startsWith('Notiz='));
+        if (notizCookie) {
+            try {
+                return JSON.parse(decodeURIComponent(notizCookie.split('=')[1]));
+            } catch(e) { return { mail: '', storage: 'local' }; }
+        }
+        return { mail: '', storage: 'local' };
+    }
+
+    async function doLogin() {
+        const email = document.getElementById('login-email').value;
+        const password = document.getElementById('login-password').value;
+        const storage = document.getElementById('storage-local').checked ? 'local' : 'server';
+
+        if (!email) return alert("Bitte Email eingeben");
+
+        if (storage === 'local') {
+            setNotizCookie(email, 'local');
+            alert("Lokaler Speicher auf diesem Gerät aktiviert.");
+            document.getElementById('login-dialog').close();
+            updateOnlineStatus();
+            return;
+        }
+
+        if (!password) return alert("Bitte Passwort eingeben");
+
+        try {
+            const response = await fetch('login.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password, storage })
+            });
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                setNotizCookie(result.mail, result.storage);
+                alert(result.message || "Login erfolgreich (Server)");
+            } else {
+                alert(result.message || "Login Fehler");
+                setNotizCookie(email, 'local');
+            }
+        } catch (e) {
+            alert("Server nicht erreichbar. Modus auf 'Lokal' gesetzt.");
+            setNotizCookie(email, 'local');
+        }
+        document.getElementById('login-dialog').close();
+        updateOnlineStatus();
+    }
+
+    // Service Worker Registrierung
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('sw.js').then(reg => {
+                reg.update(); 
+                reg.onupdatefound = () => {
+                    const installingWorker = reg.installing;
+                    installingWorker.onstatechange = () => {
+                        if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            window.location.reload();
+                        }
+                    };
+                };
+            }).catch(err => console.log("SW Error:", err));
+        });
+    }
+
+    function updateOnlineStatus() {
+        const settings = getNotizCookie();
+        const mode = settings.storage === 'server' ? "Server (Global)" : "Lokal (Gerät)";
+        
+        if (navigator.onLine) {
+            statusDiv.innerHTML = `● Online (${mode})`;
+            statusDiv.className = "online";
+            if (settings.storage === 'server') syncData();
+        } else {
+            statusDiv.innerHTML = `○ Offline Modus (${mode})`;
+            statusDiv.className = "offline";
+        }
+    }
+
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    updateOnlineStatus();
+
+    async function handleSave() {
+        const text = entryField.value.trim();
+        if (!text) return alert("Bitte Text eingeben");
+
+        const settings = getNotizCookie();
+        saveBtn.disabled = true;
+        saveBtn.innerText = "Speichert...";
+
+        try {
+            const newEntry = {
+                text: text,
+                zeitstempel: new Date().toLocaleString('de-DE', { 
+                    day: '2-digit', 
+                    month: '2-digit', 
+                    year: 'numeric', 
+                    hour: '2-digit', 
+                    minute: '2-digit', 
+                    second: '2-digit' 
+                }) + " Uhr"
+            };
+
+            if (settings.storage === 'local') {
+                saveLocally(newEntry);
+                entryField.value = "";
+            } else {
+                let savedSuccessfully = false;
+                if (navigator.onLine) {
+                    savedSuccessfully = await sendToServer(newEntry, settings.mail, settings.storage);
+                }
+
+                if (savedSuccessfully) {
+                    entryField.value = "";
+                } else {
+                    saveLocally(newEntry);
+                    entryField.value = "";
+                    alert("Temporär im Browser-Cache gespeichert (Offline oder Serverfehler)!");
+                }
+            }
+        } catch (error) {
+            console.error("Fehler:", error);
+            alert("Kritischer Fehler: " + error.message);
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.innerText = "Speichern";
+        }
+    }
+
+    function saveLocally(entry) {
+        let entries = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+        entries.push(entry);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    }
+
+    async function sendToServer(data, mail = '', storage = 'local') {
+        try {
+            const response = await fetch('./save_data.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    entries: Array.isArray(data) ? data : [data],
+                    mail: mail,
+                    storage: storage
+                })
+            });
+            return response.ok;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async function syncData() {
+        const settings = getNotizCookie();
+        const entries = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (!entries || entries.length === 0) return;
+
+        const success = await sendToServer(entries, settings.mail, settings.storage);
+        if (success) {
+            localStorage.removeItem(STORAGE_KEY);
+            console.log("Sync abgeschlossen!");
+        }
+    }
+</script>
+
+</body>
+</html>

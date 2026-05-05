@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notizen - Liste</title>
+    <meta name="theme-color" content="#007bff">
+    <link rel="manifest" href="manifest.json?v=2">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f8ff;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container { width: 100%; max-width: 500px; }
+        h1 { color: #007bff; text-align: center; }
+        .nav-button {
+            display: inline-block; margin-bottom: 20px; padding: 12px 20px;
+            background-color: #6c757d; color: white; text-decoration: none;
+            border-radius: 8px; font-size: 0.9em; text-align: center;
+        }
+        .entry-card {
+            background: white; border-radius: 8px; padding: 15px; margin-bottom: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); border-left: 5px solid #007bff;
+            animation: fadeIn 0.4s ease-out; position: relative;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .entry-date {
+            font-size: 0.8rem; color: #007bff; font-weight: bold;
+            margin-bottom: 8px; display: block; padding-right: 140px;
+        }
+        .entry-text {
+            font-size: 1.1rem; line-height: 1.4; white-space: pre-wrap;
+            word-wrap: break-word; padding: 5px;
+        }
+        .entry-text[contenteditable="true"]:focus {
+            outline: none; background-color: #f9f9f9;
+            border: 1px solid #007bff; border-radius: 4px;
+        }
+        .btn-group {
+            position: absolute; top: 15px; right: 15px; display: flex; gap: 6px;
+        }
+        .action-btn {
+            border: none; padding: 6px; border-radius: 6px; cursor: pointer;
+            font-size: 1rem; color: white; min-width: 32px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .copy-btn { background-color: #007bff; }
+        .mail-btn { background-color: #90ee90; color: #333; }
+        .delete-btn { background-color: #dc3545; }
+        .add-btn { background-color: #6f42c1; }
+        
+        .no-data {
+            text-align: center; color: #888; margin-top: 50px;
+            background: white; padding: 20px; border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <a href="index.html" class="nav-button">← Neuer Eintrag</a>
+    <h1>Meine Notizen</h1>
+    <div id="log-container">
+        <div class="no-data">Lade Einträge...</div>
+    </div>
+</div>
+
+<script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('sw.js').then(reg => {
+                reg.update(); 
+                reg.onupdatefound = () => {
+                    const installingWorker = reg.installing;
+                    installingWorker.onstatechange = () => {
+                        if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            window.location.reload();
+                        }
+                    };
+                };
+            });
+        });
+    }
+
+    function parseGermanDate(dateStr) {
+        if (!dateStr) return new Date(0);
+        try {
+            const parts = dateStr.split(', ');
+            const dateParts = parts[0].split('.');
+            const timeParts = parts[1].replace(' Uhr', '').split(':');
+            return new Date(dateParts[2], dateParts[1] - 1, dateParts[0], timeParts[0], timeParts[1], timeParts[2]);
+        } catch(e) { return new Date(0); }
+    }
+
+    async function loadLog() {
+        const logContainer = document.getElementById('log-container');
+        
+        // Cookie auslesen
+        const cookies = document.cookie.split('; ');
+        const notizCookie = cookies.find(row => row.startsWith('Notiz='));
+        let settings = { mail: '', storage: 'local' };
+        if (notizCookie) {
+            try {
+                settings = JSON.parse(decodeURIComponent(notizCookie.split('=')[1]));
+            } catch(e) {}
+        }
+        window.currentSettings = settings;
+
+        try {
+            let entries = [];
+            if (settings.storage === 'server') {
+                const response = await fetch('get_data.php?t=' + Date.now(), { cache: 'no-store' });
+                if (response.ok) {
+                    entries = await response.json();
+                }
+            } else {
+                entries = JSON.parse(localStorage.getItem('offline_training_entries')) || [];
+            }
+
+            if (!entries || entries.length === 0) {
+                logContainer.innerHTML = '<div class="no-data">Das Tagebuch ist leer.</div>';
+                return;
+            }
+
+            entries.sort((a, b) => parseGermanDate(b.zeitstempel) - parseGermanDate(a.zeitstempel));
+            logContainer.innerHTML = ''; 
+            
+            entries.forEach((entry, index) => {
+                const card = document.createElement('div');
+                card.className = 'entry-card';
+                card.dataset.timestamp = entry.zeitstempel;
+                
+                card.innerHTML = `
+                    <div class="btn-group">
+                        <button type="button" class="action-btn copy-btn" onclick="copyEntry('${entry.zeitstempel}', this)">📋</button>
+                        <button type="button" class="action-btn mail-btn" onclick="sendMailEntry('${entry.zeitstempel}', this)">✉</button>
+                        <button type="button" class="action-btn delete-btn" onclick="deleteEntry('${entry.zeitstempel}', this)">🗑</button>
+                        ${index > 0 ? `<button type="button" class="action-btn add-btn" onclick="mergeEntry('${entry.zeitstempel}', this)">🔗</button>` : ''}
+                    </div>
+                    <span class="entry-date">${entry.zeitstempel}</span>
+                    <div class="entry-text" id="text-${entry.zeitstempel}" contenteditable="true" 
+                         onfocus="this.dataset.orig = this.innerText" 
+                         onblur="updateEntry('${entry.zeitstempel}', this)">${escapeHtml(entry.text)}</div>
+                `;
+                logContainer.appendChild(card);
+            });
+        } catch (error) {
+            logContainer.innerHTML = `<div class="no-data">${error.message}</div>`;
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Prüft, ob der oberste Eintrag noch einen "Zusammenfügen"-Button hat und versteckt ihn
+    function cleanUpFirstButton() {
+        const logContainer = document.getElementById('log-container');
+        if (logContainer && logContainer.children.length > 0) {
+            const firstCardBtn = logContainer.children[0].querySelector('.add-btn');
+            if (firstCardBtn) firstCardBtn.style.display = 'none';
+        }
+    }
+
+    async function updateEntry(zeitstempel, element) {
+        const newText = element.innerText;
+        if (newText === element.dataset.orig) return; 
+
+        if (window.currentSettings.storage === 'local') {
+            let entries = JSON.parse(localStorage.getItem('offline_training_entries')) || [];
+            let i = entries.findIndex(e => e.zeitstempel === zeitstempel);
+            if (i !== -1) {
+                entries[i].text = newText;
+                localStorage.setItem('offline_training_entries', JSON.stringify(entries));
+                element.dataset.orig = newText;
+            }
+            return;
+        }
+
+        try {
+            await fetch('update.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ zeitstempel: zeitstempel, text: newText })
+            });
+            element.dataset.orig = newText;
+        } catch (error) {
+            console.error("Fehler beim Auto-Save:", error);
+        }
+    }
+
+    async function deleteEntry(zeitstempel, buttonElement) {
+        if (!confirm("Eintrag wirklich löschen?")) return;
+        const oldIcon = buttonElement.innerText;
+        buttonElement.disabled = true;
+        buttonElement.innerText = '...';
+
+        if (window.currentSettings.storage === 'local') {
+            let entries = JSON.parse(localStorage.getItem('offline_training_entries')) || [];
+            entries = entries.filter(e => e.zeitstempel !== zeitstempel);
+            localStorage.setItem('offline_training_entries', JSON.stringify(entries));
+            buttonElement.closest('.entry-card').remove();
+            const logContainer = document.getElementById('log-container');
+            if (logContainer.children.length === 0) logContainer.innerHTML = '<div class="no-data">Das Tagebuch ist leer.</div>';
+            else cleanUpFirstButton();
+            return;
+        }
+
+        try {
+            const response = await fetch('./delete.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ zeitstempel: zeitstempel }) 
+            });
+
+            if (response.ok) {
+                const cardToRemove = buttonElement.closest('.entry-card');
+                cardToRemove.remove();
+
+                const logContainer = document.getElementById('log-container');
+                if (logContainer.children.length === 0) {
+                    logContainer.innerHTML = '<div class="no-data">Das Tagebuch ist leer.</div>';
+                } else {
+                    cleanUpFirstButton();
+                }
+            } else {
+                alert('Server-Fehler beim Löschen');
+                buttonElement.disabled = false;
+                buttonElement.innerText = oldIcon;
+            }
+        } catch (error) {
+            alert('Netzwerk-Fehler beim Löschen.');
+            buttonElement.disabled = false;
+            buttonElement.innerText = oldIcon;
+        }
+    }
+
+    async function copyEntry(zeitstempel, buttonElement) {
+        const text = document.getElementById(`text-${zeitstempel}`).innerText;
+        await navigator.clipboard.writeText(text);
+        const oldIcon = buttonElement.innerText;
+        buttonElement.innerText = '✓';
+        setTimeout(() => buttonElement.innerText = oldIcon, 2000);
+    }
+
+    async function sendMailEntry(zeitstempel, buttonElement) {
+        const text = document.getElementById(`text-${zeitstempel}`).innerText;
+        
+        let defaultMail = window.currentSettings.mail || "panier@kleine-reitstation.de";
+        const targetMail = window.prompt("E-Mail senden an:", defaultMail);
+        if (!targetMail) return;
+        buttonElement.disabled = true;
+        
+        try {
+            const response = await fetch('send_mail.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ zeitstempel: zeitstempel, text: text, email: targetMail })
+            });
+            buttonElement.innerText = response.ok ? '✓' : 'X';
+        } catch(e) {
+            buttonElement.innerText = 'X';
+        }
+        setTimeout(() => { buttonElement.innerText = '✉'; buttonElement.disabled = false; }, 2000);
+    }
+
+    async function mergeEntry(sourceTimestamp, buttonElement) {
+        // 1. Suche dynamisch die Karte VOR dieser Karte
+        const currentCard = buttonElement.closest('.entry-card');
+        const targetCard = currentCard.previousElementSibling;
+
+        if (!targetCard) {
+            buttonElement.style.display = 'none'; // Falls es keinen Nachbarn gibt, Button weg
+            return;
+        }
+
+        // 2. Lese den Zeitstempel des aktuellen Nachbarn aus
+        const targetTimestamp = targetCard.dataset.timestamp;
+
+        const oldIcon = buttonElement.innerText;
+        buttonElement.disabled = true;
+        buttonElement.innerText = '...';
+
+        if (window.currentSettings.storage === 'local') {
+            let entries = JSON.parse(localStorage.getItem('offline_training_entries')) || [];
+            let sourceIdx = entries.findIndex(e => e.zeitstempel === sourceTimestamp);
+            let targetIdx = entries.findIndex(e => e.zeitstempel === targetTimestamp);
+            if (sourceIdx !== -1 && targetIdx !== -1) {
+                entries[targetIdx].text += "\n\n" + entries[sourceIdx].text;
+                entries.splice(sourceIdx, 1);
+                localStorage.setItem('offline_training_entries', JSON.stringify(entries));
+                
+                const targetTextElem = document.getElementById('text-' + targetTimestamp);
+                const sourceTextElem = document.getElementById('text-' + sourceTimestamp);
+                targetTextElem.innerText += '\n\n' + sourceTextElem.innerText;
+                targetTextElem.dataset.orig = targetTextElem.innerText;
+                currentCard.remove();
+                cleanUpFirstButton();
+                return;
+            }
+        }
+
+        try {
+            const response = await fetch('./merge.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    source_zeitstempel: sourceTimestamp, 
+                    target_zeitstempel: targetTimestamp 
+                })
+            });
+
+            if (response.ok) {
+                const sourceTextElem = document.getElementById('text-' + sourceTimestamp);
+                const targetTextElem = document.getElementById('text-' + targetTimestamp);
+
+                if (sourceTextElem && targetTextElem) {
+                    targetTextElem.innerText += '\n\n' + sourceTextElem.innerText;
+                    targetTextElem.dataset.orig = targetTextElem.innerText;
+                }
+
+                currentCard.remove(); // Die untere Karte löschen
+                cleanUpFirstButton(); // Falls die Karte ganz nach oben gerutscht ist, Button säubern
+
+            } else {
+                alert('Server-Fehler beim Zusammenfügen.');
+                buttonElement.disabled = false;
+                buttonElement.innerText = oldIcon;
+            }
+        } catch (error) {
+            console.error('Merge-Fehler:', error);
+            alert('Netzwerk-Fehler beim Zusammenfügen.');
+            buttonElement.disabled = false;
+            buttonElement.innerText = oldIcon;
+        }
+    }
+
+    window.onload = loadLog;
+</script>
+</body>
+</html>
